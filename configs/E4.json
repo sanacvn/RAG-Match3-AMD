@@ -1,0 +1,11 @@
+{
+  "method": "hybrid",
+  "rerank": true,
+  "expand": true,
+  "chunk_size": 384,
+  "chunk_overlap": 64,
+  "candidates": 20,
+  "context_k": 6,
+  "rrf_c": 60,
+  "expansion_ids": 4
+}
