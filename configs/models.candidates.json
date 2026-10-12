@@ -1,0 +1,9 @@
+{
+  "status": "development candidates; not benchmarked or approved for official runtime",
+  "models": {
+    "generator": {"repo_id": "Qwen/Qwen2.5-3B-Instruct", "revision": "main", "license_review": "Read bundled model card and license before use"},
+    "embedding": {"repo_id": "BAAI/bge-small-en-v1.5", "revision": "main", "license_review": "Read bundled model card and license before use"},
+    "vision": {"repo_id": "Qwen/Qwen2.5-VL-3B-Instruct", "revision": "main", "license_review": "Read bundled model card and license before use"},
+    "reranker": {"repo_id": "BAAI/bge-reranker-base", "revision": "main", "license_review": "Read bundled model card and license before use"}
+  }
+}

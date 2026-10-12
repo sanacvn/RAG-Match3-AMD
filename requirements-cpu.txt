@@ -1,0 +1,9 @@
+# Parsing/contract tests only. No generator, embedding or vision evaluation.
+numpy==2.2.6
+PyMuPDF==1.25.5
+python-docx==1.1.2
+lxml==5.4.0
+openpyxl==3.1.5
+et_xmlfile==2.0.0
+Pillow==11.2.1
+typing_extensions==4.13.2

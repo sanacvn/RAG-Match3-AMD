@@ -1,0 +1,28 @@
+{
+  "date": "2026-10-11 Asia/Jakarta",
+  "python": "3.12.14",
+  "platform": "Linux x86_64",
+  "unit_integration_tests": {
+    "passed": 17,
+    "failed": 0,
+    "seconds": 1.95,
+    "environment": "clean venv; requirements.txt --no-deps"
+  },
+  "pip_check": "No broken requirements found",
+  "docker_permission_test": {
+    "passed": true,
+    "uid": 0,
+    "flags": [
+      "--cap-drop DAC_OVERRIDE",
+      "--network none"
+    ],
+    "diagnostic_image": "python:3.12-slim",
+    "readable": "parsed",
+    "unreadable": "failed"
+  },
+  "gpu_forward_pass": "not tested",
+  "official_base_image": "not supplied",
+  "starter_kit_self_check": "not supplied/not run",
+  "weights_download": "not performed; provisioning rules missing and model-hub host outside workspace policy",
+  "amd_runtime_vram_image_gates": "not tested"
+}
