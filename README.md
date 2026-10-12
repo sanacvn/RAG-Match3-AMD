@@ -77,6 +77,42 @@ Worker dibootstrap oleh `--index` pada penggunaan lokal; output/log di `output/`
 `python worker.py` di terminal terpisah lalu Ctrl-C. Restart worker setiap mengubah
 backend/model/konfigurasi. Klien menolak konfigurasi yang berbeda dari worker.
 
+## Bertanya dengan satu perintah
+
+Setelah dependency dan `.env` disiapkan, gunakan `ask.py` untuk satu file atau
+folder dokumen. Path relatif dihitung dari lokasi terminal saat ini. Jika pertanyaan
+tidak diberikan, program memintanya lewat terminal:
+
+```bash
+python ask.py '/path/dokumen saya.pdf'
+python ask.py '/path/folder-dokumen' 'Apa nomor komponen kipas produk PX-713?'
+```
+
+Untuk menggunakan nama perintah `ask`, aktifkan virtualenv dan tambahkan root repo
+ke PATH sekali per terminal (Linux/macOS):
+
+```bash
+source work/venv/bin/activate
+export PATH="$PWD:$PATH"  # jalankan dari root repository
+ask '/path/dokumen saya.pdf'
+ask '/path/folder-dokumen' 'Pertanyaan tentang dokumen'
+```
+
+`ask` otomatis menjalankan indexing lalu query, menampilkan jawaban, sumber asli,
+dan lokasi JSON. File tunggal disalin ke `state/ask-inputs/` (atau `RAG_STATE_DIR`),
+karena pipeline menerima folder; file asli tidak diubah. Setiap pemanggilan
+membangun ulang indeks sehingga perubahan dokumen ikut dibaca. Worker/model yang
+konfigurasinya sama tetap digunakan. Jalankan permintaan secara berurutan karena
+worker memiliki satu indeks aktif.
+
+Untuk uji CPU teks sederhana, gunakan `python ask.py --diagnostic '/path/file.txt'`
+atau `ask --diagnostic '/path/file.txt'`. Ini memakai extractive/BM25, bukan generator
+AI, dan tidak membaca gambar. Mode normal memakai konfigurasi `.env` dan memerlukan
+bobot lokal untuk backend Transformers. Restart worker sebelum berpindah mode;
+klien akan menolak worker dengan konfigurasi berbeda. Salinan dokumen, indeks, dan
+hasil disimpan lokal dalam direktori yang diabaikan Git; jangan memakai root repo
+sebagai corpus karena state/output/model harus berada di luar corpus.
+
 ## Konfigurasi yang benar-benar dibaca
 
 Worker dan CLI membaca `.env` di root repository (atau `RAG_ENV_FILE`). Variabel yang

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Use the active Python environment and resolve the script from this checkout.
+exec python3 "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/ask.py" "$@"
