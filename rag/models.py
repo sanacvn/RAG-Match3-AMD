@@ -57,9 +57,7 @@ def verify_snapshot(path, role):
 class LocalModels:
     def __init__(self, config):
         import torch
-        from transformers import (AutoModel, AutoModelForCausalLM,
-                                  AutoModelForSequenceClassification, AutoProcessor,
-                                  AutoTokenizer, Qwen2_5_VLForConditionalGeneration)
+        from transformers import (AutoModel, AutoModelForCausalLM,AutoModelForSequenceClassification, AutoProcessor,AutoTokenizer, Qwen2_5_VLForConditionalGeneration)
         self.torch, self.config = torch, config
         if config.require_rocm and not config.device.startswith("cuda"):
             raise RuntimeError("Submission models must be placed on the AMD GPU")
@@ -83,8 +81,7 @@ class LocalModels:
         opts = dict(local_files_only=True, trust_remote_code=False, use_safetensors=True, torch_dtype=dtype)
         self.tokenizer = AutoTokenizer.from_pretrained(config.generator_path, local_files_only=True, trust_remote_code=False)
         self.generator = AutoModelForCausalLM.from_pretrained(config.generator_path, **opts).to(config.device).eval()
-        self.processor = AutoProcessor.from_pretrained(config.vision_path, local_files_only=True, trust_remote_code=False,
-                                                     min_pixels=256*28*28, max_pixels=1280*28*28)
+        self.processor = AutoProcessor.from_pretrained(config.vision_path, local_files_only=True, trust_remote_code=False,min_pixels=256*28*28, max_pixels=1280*28*28)
         self.vision_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(config.vision_path, **opts).to(config.device).eval()
         self.encoder = self.encoder_tokenizer = self.reranker = self.reranker_tokenizer = None
         if "embedding" in roles:
@@ -99,9 +96,7 @@ class LocalModels:
         if seconds < .1:
             raise TimeoutError("Model deadline exhausted")
         with self.torch.inference_mode():
-            output = model.generate(**inputs, do_sample=False, max_new_tokens=limit,
-                                    max_time=seconds, pad_token_id=model.generation_config.pad_token_id
-                                    or model.generation_config.eos_token_id)
+            output = model.generate(**inputs, do_sample=False, max_new_tokens=limit,max_time=seconds, pad_token_id=model.generation_config.pad_token_id or model.generation_config.eos_token_id)
         if time.monotonic() >= deadline:
             raise TimeoutError("Generation exceeded its deadline")
         return output[:, inputs["input_ids"].shape[1]:]
