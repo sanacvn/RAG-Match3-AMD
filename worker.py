@@ -53,6 +53,8 @@ def main():
                         response = {"ok": True, "pid": os.getpid(), "generation": pipeline.generation,
                                     "config_signature": config.signature(),
                                     "indexed_corpus": str(pipeline.root) if pipeline.root else None}
+                    elif op == "index_status":
+                        response = {"ok": True, "valid": pipeline.index_valid(message["corpus"])}
                     elif op == "index":
                         # Deadline provided by the CLI includes its worker-ready wait.
                         seconds = min(config.startup_timeout, float(message["expires_at"])-time.time())

@@ -41,6 +41,15 @@ def boolean(name, default):
 @dataclass
 class Config:
     backend: str = "transformers"
+    search_backend: str = "local"
+    chroma_host: str = "api.trychroma.com"
+    chroma_tenant: str = "11afbef7-38c1-4590-93de-3dc5dc9851f9"
+    chroma_database: str = "RAG-MATCH3-AMD"
+    chroma_scope: str = ""
+    chroma_corpus_id: str = ""
+    chroma_batch_size: int = 64
+    chroma_chunk_bytes: int = 12288
+    chroma_chunks_per_document: int = 3
     method: str = "bm25"
     rerank: bool = False
     expand: bool = False
@@ -78,6 +87,13 @@ class Config:
             raise ValueError("Unknown experiment configuration keys")
         c = cls(**values)
         c.backend = os.environ.get("RAG_BACKEND", c.backend)
+        c.search_backend = os.environ.get("RAG_SEARCH_BACKEND", c.search_backend)
+        for field, variable in (("chroma_host", "CHROMA_HOST"), ("chroma_tenant", "CHROMA_TENANT"),
+                                ("chroma_database", "CHROMA_DATABASE"), ("chroma_scope", "CHROMA_SCOPE"),
+                                ("chroma_corpus_id", "RAG_CORPUS_ID")):
+            setattr(c, field, os.environ.get(variable, getattr(c, field)))
+        for field in ("chroma_batch_size", "chroma_chunk_bytes", "chroma_chunks_per_document"):
+            setattr(c, field, int(os.environ.get(field.upper(), getattr(c, field))))
         c.socket = path_value("RAG_SOCKET", c.socket)
         for field in ("state_dir", "output_dir", "model_dir"):
             setattr(c, field, path_value("RAG_" + field.upper(), field.removesuffix("_dir")))
@@ -92,13 +108,24 @@ class Config:
             setattr(c, field, int(os.environ.get("RAG_" + field.upper(), getattr(c, field))))
         if c.backend not in {"transformers", "extractive"} or c.method not in {"bm25", "dense", "hybrid"}:
             raise ValueError("Unknown backend or retrieval method")
+        if c.search_backend not in {"local", "chroma"}:
+            raise ValueError("RAG_SEARCH_BACKEND must be local or chroma")
+        if c.search_backend == "chroma":
+            if c.chroma_host != "api.trychroma.com":
+                raise ValueError("CHROMA_HOST must be api.trychroma.com for Chroma Cloud")
+            if not all((c.chroma_tenant.strip(), c.chroma_database.strip(), c.chroma_scope.strip())):
+                raise ValueError("Chroma Cloud requires CHROMA_TENANT, CHROMA_DATABASE and CHROMA_SCOPE")
+        if not 512 <= c.chroma_chunk_bytes <= 16384 or not 1 <= c.chroma_batch_size <= 256:
+            raise ValueError("Chroma chunks must be 512–16384 bytes; batch size must be 1–256")
+        if c.chroma_chunks_per_document < 1:
+            raise ValueError("CHROMA_CHUNKS_PER_DOCUMENT must be positive")
         if not 0 <= c.chunk_overlap < c.chunk_size or min(c.candidates, c.context_k, c.rrf_c, c.expansion_ids) < 1:
             raise ValueError("Invalid retrieval/chunk parameters")
         if not 0 < c.query_timeout < 30 or not 0 < c.startup_timeout < 600 or c.parse_timeout <= 0:
             raise ValueError("Deadlines must fit official limits")
         if c.max_file_mb < 1 or c.max_new_tokens < 1:
             raise ValueError("Invalid resource limits")
-        if c.backend == "extractive" and (c.method != "bm25" or c.rerank):
+        if c.backend == "extractive" and ((c.search_backend == "local" and c.method != "bm25") or c.rerank):
             raise ValueError("Extractive diagnostics support BM25 only")
         return c
 

@@ -27,8 +27,10 @@ class AskTests(unittest.TestCase):
             pass
         self.temp.cleanup()
 
-    def ask(self, path, question=None, input=None):
+    def ask(self, path, question=None, input=None, reindex=False):
         command = [str(ROOT / "ask"), "--diagnostic", str(path)]
+        if reindex:
+            command.append("--reindex")
         if question is not None:
             command.append(question)
         return subprocess.run(command, cwd=self.root, env=self.env, input=input,
@@ -48,6 +50,14 @@ class AskTests(unittest.TestCase):
             self.assertEqual(source.read_text(), f"batch timeout: {value}\n")
         self.assertEqual({p["answer"] for p in self.outputs()}, {"235", "260"})
         self.assertTrue(all(p["citations"] == [source.name] for p in self.outputs()))
+        self.assertEqual(request(str(self.socket), {"op": "ping"}, 1)["generation"], 2)
+        result = self.ask(source.name, "What is the batch timeout?")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Menggunakan indeks", result.stderr)
+        self.assertEqual(request(str(self.socket), {"op": "ping"}, 1)["generation"], 2)
+        result = self.ask(source.name, "What is the batch timeout?", reindex=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(request(str(self.socket), {"op": "ping"}, 1)["generation"], 3)
 
     def test_folder_and_interactive_question(self):
         corpus = self.root / "documents"

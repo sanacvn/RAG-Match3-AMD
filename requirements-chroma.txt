@@ -1,0 +1,4 @@
+# Install normally (without --no-deps) alongside requirements.txt or requirements-cpu.txt.
+# These extra dependencies do not install or replace torch/torchvision.
+chromadb==1.5.9
+httpx==0.28.1

@@ -1,9 +1,116 @@
 # AMD AI League Match 3 RAG
 
-Pipeline RAG offline dengan corpus dinamis, citation berbukti, dan worker persisten.
+Pipeline RAG dengan pencarian hybrid Chroma Cloud, corpus dinamis, citation berbukti,
+dan worker persisten. Mode pencarian lokal/offline tetap tersedia.
 Implementasi model nyata memakai Transformers lokal; belum diverifikasi pada GPU AMD.
 Container submission **belum siap dinyatakan lulus**: base image wajib, aturan umum,
 starter kit, aturan bobot/network, dan hardware evaluator belum tersedia.
+
+## Chroma Cloud: pencarian dan embedding
+
+`.env.example` menyiapkan pencarian Cloud: **Chroma Cloud Qwen** untuk dense embedding,
+**Chroma Cloud SPLADE** untuk sparse/lexical embedding, lalu **RRF 70/30** untuk
+menggabungkan keduanya. Generator jawaban dan vision tetap model PyTorch lokal;
+`RAG_GENERATOR_PATH` dan `RAG_VISION_PATH` tetap menunjuk folder bobot. Embedding BGE
+lokal tidak dimuat dalam mode Cloud. Chroma tidak mempercepat generasi jawaban LLM;
+timeout CPU 26 detik tetap berlaku dan perlu benchmark terpisah.
+
+Dengan virtualenv dan PyTorch yang sudah tersedia, pasang dependency dari root repo:
+
+```bash
+./.venv/bin/python -m pip install -r requirements.txt -r requirements-chroma.txt
+./.venv/bin/python -m pip check
+```
+
+Untuk image AMD resmi, pertahankan torch/torchvision ROCm; requirements Chroma tidak
+memasang keduanya. Jangan gunakan `--no-deps` untuk `requirements-chroma.txt` karena
+SDK membutuhkan dependency tambahan. Python 3.12 Linux digunakan untuk validasi
+integrasi ini; Mac/GPU dan kecepatan model lokal belum diuji di cloud.
+
+Tambahkan konfigurasi berikut ke `.env` lokal yang diabaikan Git; simpan key hanya
+di file itu atau environment settings. Ambil key dari
+[halaman SDK database](https://www.trychroma.com/aliaatikah12/aws-us-east-1/RAG-MATCH3-AMD/sdk?tab=env).
+
+```dotenv
+RAG_SEARCH_BACKEND=chroma
+RAG_CONFIG=configs/chroma.json
+CHROMA_HOST=api.trychroma.com
+CHROMA_TENANT=11afbef7-38c1-4590-93de-3dc5dc9851f9
+CHROMA_DATABASE=RAG-MATCH3-AMD
+CHROMA_SCOPE=aliaatikah12
+CHROMA_API_KEY=<isi-key-Chroma-di-mesinmu>
+```
+
+Untuk Mac CPU gunakan `RAG_DEVICE=cpu` dan `RAG_REQUIRE_ROCM=false`. Setelah konfigurasi
+berubah, hentikan worker milik repo ini dengan SIGTERM ke PID dari `pgrep -fl worker.py`.
+Lalu validasi Cloud dan ajukan pertanyaan:
+
+```bash
+./.venv/bin/python scripts/check_chroma.py
+./.venv/bin/python ask.py '/path/AI_Eng.docx' 'apa materi di bulan 1 hari ke 8?'
+```
+
+`check_chroma.py` mengunggah dua dokumen sintetis, memeriksa read/search, lalu menghapus
+collection unik yang dibuatnya sendiri. Tidak memuat generator atau vision. Endpoint
+HTTPS yang diperlukan adalah `api.trychroma.com` untuk database dan
+`embed.trychroma.com` untuk embedding. Jika memakai proxy-secret di cloud, key harus
+diizinkan pada **kedua** tujuan tersebut. TLS verification dan proxy bawaan dipertahankan.
+
+Collection dipisahkan menurut `CHROMA_SCOPE` (pengguna/organisasi), identitas corpus,
+dan versi schema embedding. Berikan scope berbeda untuk data yang tidak boleh
+bercampur; pemisahan collection bukan pengganti kontrol akses tenant/API key. Opsional
+`RAG_CORPUS_ID` memberikan identitas tetap saat folder dipindah antarmesin; gunakan ID
+unik per corpus, bukan satu ID yang sama untuk semua file `ask`.
+
+Setiap collection dibuat dengan `get_or_create_collection` dan schema dense+sparse.
+Chunk memiliki `document_id`, `chunk_index`, path asli, ID evidence dan lokasi sumber.
+Chunk besar dipotong berdasarkan baris dengan batas default **12 KiB UTF-8**, termasuk
+pemotongan baris panjang pada batas karakter, agar tidak melampaui limit **16 KiB**.
+Search memakai `GroupBy(document_id)` untuk mengambil maksimum tiga chunk per dokumen
+(ubah `CHROMA_CHUNKS_PER_DOCUMENT` bila perlu lebih banyak bukti dari satu dokumen).
+
+Versi corpus diberi revision dan selalu difilter saat search. Upload yang gagal tidak
+mengaktifkan indeks parsial. Indexing ulang versi yang sama hanya mengunggah chunk
+yang belum ada; `ask` memakai ulang indeks bila inventory corpus belum berubah.
+`ask --reindex` memaksa pembangunan ulang. Versi berbeda di-embed ulang dan revision
+lama tetap tersimpan sehingga tidak menghapus data milik proses lain; kelola retensi
+collection di dashboard untuk membatasi penyimpanan. Benchmark kualitas, waktu dan
+biaya Cloud pada corpus sendiri; belum ada klaim bahwa API Cloud lebih cepat dari
+pencarian NumPy lokal untuk corpus kecil. Teks chunk dikirim ke Chroma untuk embedding
+dan penyimpanan, sedangkan generasi jawaban tetap lokal.
+
+### Migrasi indeks lama
+
+Tidak perlu mengunduh embedding BGE untuk Cloud. Skrip berikut membaca evidence dari
+snapshot lokal, melakukan chunking, dan menghasilkan embedding Qwen + SPLADE baru.
+Vektor NumPy lama tidak disalin karena ruang embedding berbeda. Snapshot lama dan
+file asli tetap utuh. Corpus harus masih cocok dengan fingerprint snapshot.
+
+```bash
+# .env Cloud: gunakan RAG_STATE_DIR=state/chroma agar state lama tetap terpisah.
+./.venv/bin/python scripts/migrate_chroma.py --snapshot state/index.json --dry-run
+./.venv/bin/python scripts/migrate_chroma.py --snapshot state/index.json \
+  --output state/chroma/index.json
+```
+
+Output migration tidak boleh menimpa file yang sudah ada. Restart worker dengan
+konfigurasi `.env` yang sama (termasuk `RAG_STATE_DIR=state/chroma`) untuk restore.
+Restore memeriksa fingerprint, model/config dan kelengkapan record Cloud. Jika belum
+ada snapshot lama, cukup jalankan `ask`; indexing dan upload dilakukan otomatis.
+
+Untuk mode offline, pilih `RAG_SEARCH_BACKEND=local` dan config E0–E5. Cloud memerlukan
+Internet dan akun Chroma; jangan gunakan profil Cloud untuk evaluator yang melarang
+network. Config Cloud `dense` memilih Qwen saja, `hybrid` memilih RRF Qwen+SPLADE, dan
+nama metode legacy `bm25` memilih SPLADE lexical (bukan skor BM25 lokal). E0–E5 tetap
+memiliki arti asli ketika `RAG_SEARCH_BACKEND=local`.
+
+Referensi: [indeks dokumentasi](https://docs.trychroma.com/llms.txt),
+[schema sparse](https://docs.trychroma.com/cloud/schema/sparse-vector-search.md),
+[hybrid RRF](https://docs.trychroma.com/cloud/search-api/hybrid-search.md),
+[Qwen](https://docs.trychroma.com/integrations/embedding-models/chroma-cloud-qwen.md),
+[SPLADE](https://docs.trychroma.com/integrations/embedding-models/chroma-cloud-splade.md),
+[GroupBy](https://docs.trychroma.com/cloud/search-api/group-by.md),
+dan [chunking](https://docs.trychroma.com/guides/build/chunking.md).
 
 ## Sumber ketentuan
 
@@ -28,6 +135,7 @@ rag/config.py          .env + environment + konfigurasi eksperimen
 rag/parsers.py         walk rekursif, parser subprocess dan provenance
 rag/models.py          generator, embedding, vision, reranker lokal
 rag/retrieval.py        BM25, dense, RRF, rerank dan pencarian identifier
+rag/chroma_search.py    Chroma Cloud schema, Qwen/SPLADE, RRF dan GroupBy
 rag/evidence.py        validasi quote, qualifier, rantai dan citation
 rag/pipeline.py        rebuild corpus, persist/restore, fingerprint
 configs/               E0–E5 dan kandidat model
@@ -55,6 +163,7 @@ Untuk diagnostik CPU, isi `.env`:
 
 ```dotenv
 RAG_BACKEND=extractive
+RAG_SEARCH_BACKEND=local
 RAG_DEVICE=cpu
 RAG_REQUIRE_ROCM=false
 RAG_CONFIG=configs/E0.json
@@ -100,8 +209,9 @@ ask '/path/folder-dokumen' 'Pertanyaan tentang dokumen'
 
 `ask` otomatis menjalankan indexing lalu query, menampilkan jawaban, sumber asli,
 dan lokasi JSON. File tunggal disalin ke `state/ask-inputs/` (atau `RAG_STATE_DIR`),
-karena pipeline menerima folder; file asli tidak diubah. Setiap pemanggilan
-membangun ulang indeks sehingga perubahan dokumen ikut dibaca. Worker/model yang
+karena pipeline menerima folder; file asli tidak diubah. Indeks yang masih valid
+dipakai ulang; dokumen yang berubah diindeks kembali. Gunakan `--reindex` untuk
+memaksa rebuild. Worker/model yang
 konfigurasinya sama tetap digunakan. Jalankan permintaan secara berurutan karena
 worker memiliki satu indeks aktif.
 
@@ -123,11 +233,17 @@ interpolasi, atau eksekusi. Jangan memakai `export KEY=...` di file `.env`.
 | Variabel | Kewajiban / default |
 |---|---|
 | `RAG_BACKEND` | Default `transformers`; `extractive` hanya diagnostik |
+| `RAG_SEARCH_BACKEND` | `chroma` untuk Cloud; default kode `local` untuk mempertahankan alur offline |
+| `CHROMA_API_KEY` | Wajib untuk pencarian/embedding Cloud; tidak disimpan dalam snapshot/config signature |
+| `CHROMA_HOST`, `CHROMA_TENANT`, `CHROMA_DATABASE` | Host Cloud dan identitas akun/database; lihat contoh di atas |
+| `CHROMA_SCOPE`, `RAG_CORPUS_ID` | Scope wajib untuk Cloud; identitas corpus opsional |
+| `CHROMA_CHUNK_BYTES`, `CHROMA_BATCH_SIZE` | Default 12288 byte dan 64 record per batch |
+| `CHROMA_CHUNKS_PER_DOCUMENT` | Default 3; GroupBy membatasi chunk per source document |
 | `RAG_CONFIG` | Opsional, default `configs/E0.json` |
 | `RAG_DEVICE`, `RAG_REQUIRE_ROCM` | Default `cuda`, `true`; wajib sesuai GPU untuk submission |
 | `RAG_MODEL_DIR` | Default `models`; snapshot lokal wajib untuk model nyata |
 | `RAG_GENERATOR_PATH`, `RAG_VISION_PATH` | Opsional override; snapshot wajib, default `models/generator`, `models/vision` |
-| `RAG_EMBEDDING_PATH` | Snapshot wajib pada dense/hybrid; default `models/embedding` |
+| `RAG_EMBEDDING_PATH` | Snapshot wajib pada dense/hybrid **lokal**; tidak dipakai pada Cloud |
 | `RAG_RERANKER_PATH` | Snapshot wajib bila rerank; default `models/reranker` |
 | `RAG_VERIFY_WEIGHTS` | Default `true`; SHA file dan revision diperiksa saat model load |
 | `RAG_SOCKET` | Opsional, default `/tmp/match3-rag.sock`; unik per worker |
@@ -137,7 +253,8 @@ interpolasi, atau eksekusi. Jangan memakai `export KEY=...` di file `.env`.
 | `RAG_MAX_NEW_TOKENS` | Opsional, default 512; ukur pengaruh ke JSON dan latensi |
 | `HF_TOKEN` | Opsional, hanya provisioning model bila akses memerlukannya |
 
-Tidak ada credential/API wajib untuk inference. `BASE_IMAGE` adalah argumen build
+Generasi jawaban lokal tidak membutuhkan API key; search Cloud membutuhkan key Chroma.
+`BASE_IMAGE` adalah argumen build
 wajib, **bukan** environment runtime; harus berasal dari aturan resmi. Semua direktori
 state/output/model dan label evaluasi harus di luar corpus. Tidak ada aturan berdasarkan
 nama produk, subfolder, file, query-id, atau expected answer.
