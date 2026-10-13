@@ -1,0 +1,10 @@
+# Install normally, with dependencies. No PyTorch/Transformers required.
+chromadb==1.5.9
+openai==2.29.0
+httpx==0.28.1
+numpy==2.2.6
+PyMuPDF==1.25.5
+python-docx==1.1.2
+openpyxl==3.1.5
+Pillow==11.2.1
+typing_extensions==4.16.0

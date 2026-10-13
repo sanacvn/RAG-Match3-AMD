@@ -43,8 +43,12 @@ def main(argv=None):
                 (len(e.content.encode('utf-8')) for e in chunks), default=0), "uploaded": False}))
             return 0
         deadline = time.monotonic() + config.startup_timeout
-        identities = [m for m in snapshot["models"] if m["role"] != "embedding"
-                      and (config.rerank or m["role"] != "reranker")]
+        if config.backend == "openai":
+            from rag.openai_models import openai_identities
+            identities = openai_identities(config)
+        else:
+            identities = [m for m in snapshot["models"] if m["role"] != "embedding"
+                          and (config.rerank or m["role"] != "reranker")]
         revision = revision_for(snapshot["fingerprint"], config, identities)
         store = CloudStore(config, corpus, revision, chunks)
         uploaded = store.upload(deadline)

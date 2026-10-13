@@ -1,3 +1,21 @@
+# OpenAI API runtime — 13 Oktober 2026 (Asia/Jakarta)
+
+Pembaruan ini melanjutkan integrasi Chroma di commit c9df2c7. Backend `openai`
+serta `configs/cloud.json` ditambahkan tanpa mengganti implementasi Chroma/revision
+isolation yang sudah ada. `requirements-cloud.txt` menyediakan runtime tanpa torch.
+
+37 tes lulus: 29 tes lokal/Chroma yang sudah ada dan 8 tes baru OpenAI/config/migration.
+Tes memakai SDK asli dengan HTTP boundary simulasi lokal; tidak ada request ke API
+berbayar. Cakupan baru meliputi Chroma + OpenAI + citation + restore tanpa model lokal,
+vision image input, HTTP 503 tanpa retry, respons terpotong, kutipan palsu, key hilang,
+HTTPS config validation, dotenv export/nomor baris tanpa mencetak secret, serta
+identitas model migration yang kompatibel dengan worker OpenAI.
+
+`pip check` dan `git diff --check` lulus. Koneksi API live, akurasi/latensi model,
+GPU dan Docker tidak diukur oleh tes ini. Credentials belum tersedia di workspace.
+
+---
+
 # Verifikasi 11 Oktober 2026 (Asia/Jakarta)
 
 ## Hasil yang dijalankan
