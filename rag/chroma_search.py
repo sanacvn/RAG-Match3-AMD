@@ -138,11 +138,15 @@ class CloudStore:
                                   "location": json.dumps(e.location, sort_keys=True)})
             indices[e.source_path] += 1
         client = client if client is not None else connect(config)
-        schema, dense = build_schema()
+        schema, _ = build_schema()
         ownership = {"integration": SCHEMA_VERSION, "scope_hash": scope,
                      "corpus_hash": corpus_id, "schema_hash": schema_id}
+        # The dense and sparse embedding functions are already bound in Schema.
+        # chromadb 1.5.x converts a non-None embedding_function argument into the
+        # legacy collection configuration, and Chroma Cloud rejects requests that
+        # set both collection configuration and schema.
         self.collection = client.get_or_create_collection(
-            name=self.name, schema=schema, embedding_function=dense, metadata=ownership)
+            name=self.name, schema=schema, embedding_function=None, metadata=ownership)
         # get_or_create ignores schema/metadata on existing collections. Fail closed.
         if any((self.collection.metadata or {}).get(k) != v for k, v in ownership.items()):
             raise ValueError("Chroma collection ownership/schema mismatch; use a distinct scope or corpus ID")

@@ -32,6 +32,7 @@ class SDKTransport:
         self.upserts = 0
         self.searches = []
         self.embedding_requests = []
+        self.collection_embedding_functions = []
         self.fail_upload = False
 
     def post_embeddings(self, url, **kwargs):
@@ -43,6 +44,7 @@ class SDKTransport:
         return httpx.Response(200, json={"embeddings": embeddings}, request=httpx.Request("POST", url))
 
     def get_or_create_collection(self, name, schema, embedding_function, metadata):
+        self.collection_embedding_functions.append(embedding_function)
         if name not in self.collections:
             model = CollectionModel(id=uuid.uuid4(), name=name, configuration_json={},
                                     serialized_schema=schema.serialize_to_json(), metadata=metadata,
@@ -140,6 +142,7 @@ class ChromaTests(unittest.TestCase):
         schema = store.collection.schema.serialize_to_json()
         dense = schema["keys"]["#embedding"]["float_list"]["vector_index"]["config"]
         self.assertEqual(dense["embedding_function"]["name"], "chroma-cloud-qwen")
+        self.assertEqual(self.transport.collection_embedding_functions, [None])
         self.assertNotIn("test-placeholder", json.dumps(schema))
 
     def test_idempotence_revision_isolation_and_sharding(self):

@@ -17,7 +17,11 @@ class Pipeline:
         if config.search_backend == "chroma":
             from .chroma_search import require_credentials
             require_credentials()
-        self.models = LocalModels(config) if config.backend == "transformers" else ExtractiveDiagnostics()
+        if config.backend == "openai":
+            from .openai_models import OpenAIModels
+            self.models = OpenAIModels(config)
+        else:
+            self.models = LocalModels(config) if config.backend == "transformers" else ExtractiveDiagnostics()
         self.retriever = None
         self.root = self.corpus_fingerprint = None
         self.generation = 0

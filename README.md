@@ -2,15 +2,69 @@
 
 Pipeline RAG dengan pencarian hybrid Chroma Cloud, corpus dinamis, citation berbukti,
 dan worker persisten. Mode pencarian lokal/offline tetap tersedia.
-Implementasi model nyata memakai Transformers lokal; belum diverifikasi pada GPU AMD.
+Jawaban/vision dapat memakai OpenAI API atau Transformers lokal; GPU AMD belum diverifikasi.
 Container submission **belum siap dinyatakan lulus**: base image wajib, aturan umum,
 starter kit, aturan bobot/network, dan hardware evaluator belum tersedia.
+
+## OpenAI untuk jawaban dan vision (tanpa PyTorch lokal)
+
+Profil `.env.example` sekarang memakai `RAG_BACKEND=openai` dan
+`RAG_CONFIG=configs/cloud.json`. File `configs/cloud.json` tersedia bersama
+`configs/chroma.json`; keduanya memakai pencarian hybrid Chroma. Model jawaban
+serta pembacaan gambar/PDF scan memakai `gpt-4.1-mini` melalui OpenAI API.
+Mode ini tidak memuat model PyTorch lokal atau memerlukan GPU/model snapshots.
+
+Dari root repo, pasang dependency cloud ke virtualenv yang digunakan `ask.py`:
+
+```bash
+./.venv/bin/python -m pip install -r requirements-cloud.txt
+./.venv/bin/python -m pip check
+```
+
+Tambahkan/perbaiki nilai berikut di `.env` tanpa menghapus key Chroma yang sudah ada:
+
+```dotenv
+RAG_BACKEND=openai
+RAG_SEARCH_BACKEND=chroma
+RAG_CONFIG=configs/cloud.json
+CHROMA_SCOPE=aliaatikah12
+OPENAI_API_KEY=<isi-key-OpenAI-di-mesinmu>
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_VISION_MODEL=gpt-4.1-mini
+RAG_DEVICE=cpu
+RAG_REQUIRE_ROCM=false
+RAG_MAX_NEW_TOKENS=1024
+```
+
+`CHROMA_API_KEY`, tenant, database, dan host tetap diperlukan sesuai bagian Chroma
+berikut. `OPENAI_API_KEY` adalah key terpisah. `.env` dan credential tidak disimpan
+ke Git atau snapshot. `OPENAI_BASE_URL` default `https://api.openai.com/v1`, wajib
+HTTPS tanpa credential di URL. Restart worker setelah perubahan konfigurasi.
+
+```bash
+./.venv/bin/python ask.py '/path/AI_Eng.docx' 'apa materi di bulan 1 hari ke 8?'
+```
+
+Chroma menyiapkan embedding saat indexing; OpenAI menerima konteks hasil pencarian
+untuk menjawab. Kutipan/ID bukti tetap diperiksa validator yang sama. Jawaban belum
+lengkap, HTTP error, dan timeout menghasilkan error operasional; request OpenAI tidak
+mengulang otomatis. Vision gambar juga memakai model API yang bisa diganti melalui
+`OPENAI_VISION_MODEL`. Kecepatan/akurasi layanan live belum diukur.
+
+Migration `scripts/migrate_chroma.py` tetap tersedia. Pada backend OpenAI, migration
+menulis identitas generator/vision API yang cocok dengan worker cloud, sehingga
+snapshot hasil migration dapat di-restore tanpa bobot lokal. Membuat snapshot
+migration tidak memanggil OpenAI dan hanya membutuhkan key Chroma.
+
+Runtime membutuhkan akses HTTPS ke `api.trychroma.com`, `embed.trychroma.com`, dan
+`api.openai.com`. Untuk runtime offline/GPU resmi, pilih kembali
+`RAG_BACKEND=transformers` dan ikuti persyaratan model/perangkat sebelumnya.
 
 ## Chroma Cloud: pencarian dan embedding
 
 `.env.example` menyiapkan pencarian Cloud: **Chroma Cloud Qwen** untuk dense embedding,
 **Chroma Cloud SPLADE** untuk sparse/lexical embedding, lalu **RRF 70/30** untuk
-menggabungkan keduanya. Generator jawaban dan vision tetap model PyTorch lokal;
+menggabungkan keduanya. Pada backend `transformers`, generator jawaban dan vision tetap model PyTorch lokal;
 `RAG_GENERATOR_PATH` dan `RAG_VISION_PATH` tetap menunjuk folder bobot. Embedding BGE
 lokal tidak dimuat dalam mode Cloud. Chroma tidak mempercepat generasi jawaban LLM;
 timeout CPU 26 detik tetap berlaku dan perlu benchmark terpisah.
@@ -77,7 +131,7 @@ lama tetap tersimpan sehingga tidak menghapus data milik proses lain; kelola ret
 collection di dashboard untuk membatasi penyimpanan. Benchmark kualitas, waktu dan
 biaya Cloud pada corpus sendiri; belum ada klaim bahwa API Cloud lebih cepat dari
 pencarian NumPy lokal untuk corpus kecil. Teks chunk dikirim ke Chroma untuk embedding
-dan penyimpanan, sedangkan generasi jawaban tetap lokal.
+dan penyimpanan, sedangkan backend OpenAI mengirim konteks hasil pencarian ke API OpenAI.
 
 ### Migrasi indeks lama
 

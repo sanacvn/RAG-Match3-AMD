@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -12,14 +13,16 @@ def load_env(path=None):
     path = Path(path or os.environ.get("RAG_ENV_FILE", ROOT / ".env"))
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
+    for number, line in enumerate(path.read_text().splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
+        if line.startswith("export "):
+            line = line[7:].strip()
         key, sep, value = line.partition("=")
         key = key.strip()
         if not sep or not key.replace("_", "").isalnum():
-            raise ValueError(f"Invalid configuration line in {path}")
+            raise ValueError(f"Invalid configuration line {number} in {path}; expected KEY=value")
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
@@ -75,19 +78,25 @@ class Config:
     parse_timeout: float = 15
     max_file_mb: int = 100
     max_new_tokens: int = 512
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4.1-mini"
+    openai_vision_model: str = "gpt-4.1-mini"
 
     @classmethod
     def read(cls):
         load_env()
-        config_path = path_value("RAG_CONFIG", ROOT / "configs/E0.json")
+        backend = os.environ.get("RAG_BACKEND", "transformers")
+        config_path = path_value("RAG_CONFIG", ROOT / ("configs/cloud.json" if backend == "openai" else "configs/E0.json"))
         values = json.loads(Path(config_path).read_text())
         allowed = {"method", "rerank", "expand", "chunk_size", "chunk_overlap",
                    "candidates", "context_k", "rrf_c", "expansion_ids"}
         if set(values) - allowed:
             raise ValueError("Unknown experiment configuration keys")
         c = cls(**values)
-        c.backend = os.environ.get("RAG_BACKEND", c.backend)
-        c.search_backend = os.environ.get("RAG_SEARCH_BACKEND", c.search_backend)
+        c.backend = backend
+        c.search_backend = os.environ.get("RAG_SEARCH_BACKEND", "chroma" if backend == "openai" else c.search_backend)
+        for field in ("openai_base_url", "openai_model", "openai_vision_model"):
+            setattr(c, field, os.environ.get(field.upper(), getattr(c, field)).strip())
         for field, variable in (("chroma_host", "CHROMA_HOST"), ("chroma_tenant", "CHROMA_TENANT"),
                                 ("chroma_database", "CHROMA_DATABASE"), ("chroma_scope", "CHROMA_SCOPE"),
                                 ("chroma_corpus_id", "RAG_CORPUS_ID")):
@@ -99,15 +108,25 @@ class Config:
             setattr(c, field, path_value("RAG_" + field.upper(), field.removesuffix("_dir")))
         for role in ("generator", "embedding", "vision", "reranker"):
             setattr(c, role + "_path", path_value("RAG_" + role.upper() + "_PATH", Path(c.model_dir) / role))
-        c.device = os.environ.get("RAG_DEVICE", c.device)
-        c.require_rocm = boolean("RAG_REQUIRE_ROCM", c.require_rocm)
+        c.device = os.environ.get("RAG_DEVICE", "cpu" if backend == "openai" else c.device)
+        c.require_rocm = boolean("RAG_REQUIRE_ROCM", False if backend == "openai" else c.require_rocm)
         c.verify_weights = boolean("RAG_VERIFY_WEIGHTS", c.verify_weights)
         for field in ("query_timeout", "startup_timeout", "parse_timeout"):
             setattr(c, field, float(os.environ.get("RAG_" + field.upper(), getattr(c, field))))
         for field in ("max_file_mb", "max_new_tokens"):
             setattr(c, field, int(os.environ.get("RAG_" + field.upper(), getattr(c, field))))
-        if c.backend not in {"transformers", "extractive"} or c.method not in {"bm25", "dense", "hybrid"}:
-            raise ValueError("Unknown backend or retrieval method")
+        if c.backend not in {"transformers", "extractive", "openai"}:
+            raise ValueError("RAG_BACKEND must be transformers, extractive, or openai")
+        if c.method not in {"bm25", "dense", "hybrid"}:
+            raise ValueError("Retrieval method must be bm25, dense, or hybrid")
+        if backend == "openai":
+            if c.search_backend != "chroma" or c.rerank:
+                raise ValueError("OpenAI mode requires RAG_SEARCH_BACKEND=chroma and rerank=false")
+            url = urlparse(c.openai_base_url)
+            if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment:
+                raise ValueError("OPENAI_BASE_URL must be an HTTPS API URL without credentials")
+            if not c.openai_model or not c.openai_vision_model:
+                raise ValueError("OpenAI model names must not be empty")
         if c.search_backend not in {"local", "chroma"}:
             raise ValueError("RAG_SEARCH_BACKEND must be local or chroma")
         if c.search_backend == "chroma":
