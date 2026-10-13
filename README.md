@@ -1,489 +1,288 @@
-# AMD AI League Match 3 RAG
+# RAG Match3 AMD
 
-Pipeline RAG dengan pencarian hybrid Chroma Cloud, corpus dinamis, citation berbukti,
-dan worker persisten. Mode pencarian lokal/offline tetap tersedia.
-Jawaban/vision dapat memakai OpenAI API atau Transformers lokal; GPU AMD belum diverifikasi.
-Container submission **belum siap dinyatakan lulus**: base image wajib, aturan umum,
-starter kit, aturan bobot/network, dan hardware evaluator belum tersedia.
+RAG Match3 AMD adalah aplikasi tanya jawab dokumen yang dibuat untuk AMD AI League
+Match 3. Pengguna cukup memberikan satu file atau sebuah folder, lalu mengajukan
+pertanyaan dengan bahasa sehari-hari. Sistem mencari bagian dokumen yang paling
+relevan, menyusun jawaban dari bagian tersebut, dan mengembalikan nama file sumbernya.
 
-## OpenAI untuk jawaban dan vision (tanpa PyTorch lokal)
+Versi saat ini memakai Chroma Cloud untuk embedding dan pencarian, serta OpenAI untuk
+membaca gambar dan menyusun jawaban. Model PyTorch lokal masih tersedia sebagai jalur
+eksperimen, tetapi bukan konfigurasi utama yang dijelaskan di README ini.
 
-Profil `.env.example` sekarang memakai `RAG_BACKEND=openai` dan
-`RAG_CONFIG=configs/cloud.json`. File `configs/cloud.json` tersedia bersama
-`configs/chroma.json`; keduanya memakai pencarian hybrid Chroma. Model jawaban
-serta pembacaan gambar/PDF scan memakai `gpt-4.1-mini` melalui OpenAI API.
-Mode ini tidak memuat model PyTorch lokal atau memerlukan GPU/model snapshots.
+## Cara kerja
 
-Dari root repo, pasang dependency cloud ke virtualenv yang digunakan `ask.py`:
-
-```bash
-./.venv/bin/python -m pip install -r requirements-cloud.txt
-./.venv/bin/python -m pip check
+```text
+Dokumen
+   │
+   ├─ parsing teks, tabel, halaman, dan gambar
+   ├─ chunking + metadata sumber
+   ▼
+Chroma Cloud
+   ├─ Qwen dense embedding
+   ├─ SPLADE sparse embedding
+   └─ hybrid search dengan RRF dan GroupBy
+   ▼
+Potongan dokumen yang relevan
+   ▼
+OpenAI GPT-4.1 Mini
+   └─ jawaban + citation ke file asli
 ```
 
-Tambahkan/perbaiki nilai berikut di `.env` tanpa menghapus key Chroma yang sudah ada:
+Saat indexing, teks dipecah menjadi chunk dan dikirim ke Chroma Cloud. Chroma membuat
+dense embedding dengan Qwen dan sparse embedding dengan SPLADE. Hasil keduanya
+digabungkan memakai Reciprocal Rank Fusion (RRF). `GroupBy` membatasi hasil dari
+dokumen yang sama agar konteks tidak dipenuhi oleh potongan yang berulang.
+
+Jika input berupa gambar atau halaman PDF scan, OpenAI vision dipakai untuk membaca
+isinya saat indexing. Ketika pengguna bertanya, hanya konteks hasil pencarian yang
+diteruskan ke OpenAI untuk menyusun jawaban. Citation diperiksa kembali sebelum hasil
+ditulis.
+
+## Fitur
+
+- Hybrid search: dense Qwen + sparse SPLADE + RRF.
+- Mendukung PDF, DOCX, XLSX, CSV, TXT, LOG, Python, PNG, JPG, dan JPEG.
+- Membaca paragraf, tabel, seluruh sheet spreadsheet, gambar, dan halaman PDF scan.
+- Menyimpan provenance seperti file, halaman, sheet, baris, blok, dan indeks chunk.
+- Memisahkan collection berdasarkan scope, corpus, dan versi schema.
+- Memakai ulang indeks jika dokumen belum berubah.
+- Menolak citation atau kutipan yang tidak didukung oleh evidence.
+- Menyediakan migrasi snapshot dari indeks lokal ke Chroma Cloud.
+
+## Teknologi
+
+| Komponen | Pilihan saat ini |
+|---|---|
+| Vector database | Chroma Cloud |
+| Dense embedding | Chroma Cloud Qwen |
+| Sparse embedding | Chroma Cloud SPLADE |
+| Penggabungan hasil | Reciprocal Rank Fusion, bobot 70/30 |
+| Deduplication | GroupBy berdasarkan dokumen |
+| LLM jawaban | OpenAI `gpt-4.1-mini` |
+| Vision | OpenAI `gpt-4.1-mini` |
+| Runtime | Python 3.10+ |
+
+## Persiapan
+
+Yang dibutuhkan:
+
+- Python 3.10 atau lebih baru.
+- Chroma Cloud API key dan database aktif.
+- OpenAI API key dari project yang memiliki kredit API.
+- Koneksi ke `api.trychroma.com`, `embed.trychroma.com`, dan `api.openai.com`.
+
+Clone repository dan buat virtual environment:
+
+```bash
+git clone https://github.com/sanacvn/RAG-Match3-AMD.git
+cd RAG-Match3-AMD
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-cloud.txt
+python -m pip check
+```
+
+Salin konfigurasi contoh:
+
+```bash
+cp .env.example .env
+```
+
+Isi `.env` dengan credential milik sendiri:
 
 ```dotenv
 RAG_BACKEND=openai
 RAG_SEARCH_BACKEND=chroma
 RAG_CONFIG=configs/cloud.json
-CHROMA_SCOPE=aliaatikah12
-OPENAI_API_KEY=<isi-key-OpenAI-di-mesinmu>
+
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_VISION_MODEL=gpt-4.1-mini
-RAG_DEVICE=cpu
-RAG_REQUIRE_ROCM=false
-RAG_MAX_NEW_TOKENS=1024
-```
 
-`CHROMA_API_KEY`, tenant, database, dan host tetap diperlukan sesuai bagian Chroma
-berikut. `OPENAI_API_KEY` adalah key terpisah. `.env` dan credential tidak disimpan
-ke Git atau snapshot. `OPENAI_BASE_URL` default `https://api.openai.com/v1`, wajib
-HTTPS tanpa credential di URL. Restart worker setelah perubahan konfigurasi.
-
-```bash
-./.venv/bin/python ask.py '/path/AI_Eng.docx' 'apa materi di bulan 1 hari ke 8?'
-```
-
-Chroma menyiapkan embedding saat indexing; OpenAI menerima konteks hasil pencarian
-untuk menjawab. Kutipan/ID bukti tetap diperiksa validator yang sama. Jawaban belum
-lengkap, HTTP error, dan timeout menghasilkan error operasional; request OpenAI tidak
-mengulang otomatis. Vision gambar juga memakai model API yang bisa diganti melalui
-`OPENAI_VISION_MODEL`. Kecepatan/akurasi layanan live belum diukur.
-
-Migration `scripts/migrate_chroma.py` tetap tersedia. Pada backend OpenAI, migration
-menulis identitas generator/vision API yang cocok dengan worker cloud, sehingga
-snapshot hasil migration dapat di-restore tanpa bobot lokal. Membuat snapshot
-migration tidak memanggil OpenAI dan hanya membutuhkan key Chroma.
-
-Runtime membutuhkan akses HTTPS ke `api.trychroma.com`, `embed.trychroma.com`, dan
-`api.openai.com`. Untuk runtime offline/GPU resmi, pilih kembali
-`RAG_BACKEND=transformers` dan ikuti persyaratan model/perangkat sebelumnya.
-
-## Chroma Cloud: pencarian dan embedding
-
-`.env.example` menyiapkan pencarian Cloud: **Chroma Cloud Qwen** untuk dense embedding,
-**Chroma Cloud SPLADE** untuk sparse/lexical embedding, lalu **RRF 70/30** untuk
-menggabungkan keduanya. Pada backend `transformers`, generator jawaban dan vision tetap model PyTorch lokal;
-`RAG_GENERATOR_PATH` dan `RAG_VISION_PATH` tetap menunjuk folder bobot. Embedding BGE
-lokal tidak dimuat dalam mode Cloud. Chroma tidak mempercepat generasi jawaban LLM;
-timeout CPU 26 detik tetap berlaku dan perlu benchmark terpisah.
-
-Dengan virtualenv dan PyTorch yang sudah tersedia, pasang dependency dari root repo:
-
-```bash
-./.venv/bin/python -m pip install -r requirements.txt -r requirements-chroma.txt
-./.venv/bin/python -m pip check
-```
-
-Untuk image AMD resmi, pertahankan torch/torchvision ROCm; requirements Chroma tidak
-memasang keduanya. Jangan gunakan `--no-deps` untuk `requirements-chroma.txt` karena
-SDK membutuhkan dependency tambahan. Python 3.12 Linux digunakan untuk validasi
-integrasi ini; Mac/GPU dan kecepatan model lokal belum diuji di cloud.
-
-Tambahkan konfigurasi berikut ke `.env` lokal yang diabaikan Git; simpan key hanya
-di file itu atau environment settings. Ambil key dari
-[halaman SDK database](https://www.trychroma.com/aliaatikah12/aws-us-east-1/RAG-MATCH3-AMD/sdk?tab=env).
-
-```dotenv
-RAG_SEARCH_BACKEND=chroma
-RAG_CONFIG=configs/chroma.json
 CHROMA_HOST=api.trychroma.com
 CHROMA_TENANT=11afbef7-38c1-4590-93de-3dc5dc9851f9
 CHROMA_DATABASE=RAG-MATCH3-AMD
 CHROMA_SCOPE=aliaatikah12
-CHROMA_API_KEY=<isi-key-Chroma-di-mesinmu>
+CHROMA_API_KEY=
+
+RAG_DEVICE=cpu
+RAG_REQUIRE_ROCM=false
 ```
 
-Untuk Mac CPU gunakan `RAG_DEVICE=cpu` dan `RAG_REQUIRE_ROCM=false`. Setelah konfigurasi
-berubah, hentikan worker milik repo ini dengan SIGTERM ke PID dari `pgrep -fl worker.py`.
-Lalu validasi Cloud dan ajukan pertanyaan:
+`.env` tidak masuk Git. Jangan menaruh API key di source code, commit, screenshot,
+atau output terminal yang dibagikan.
+
+## Menjalankan project
+
+Untuk memastikan koneksi Chroma bekerja:
 
 ```bash
 ./.venv/bin/python scripts/check_chroma.py
-./.venv/bin/python ask.py '/path/AI_Eng.docx' 'apa materi di bulan 1 hari ke 8?'
 ```
 
-`check_chroma.py` mengunggah dua dokumen sintetis, memeriksa read/search, lalu menghapus
-collection unik yang dibuatnya sendiri. Tidak memuat generator atau vision. Endpoint
-HTTPS yang diperlukan adalah `api.trychroma.com` untuk database dan
-`embed.trychroma.com` untuk embedding. Jika memakai proxy-secret di cloud, key harus
-diizinkan pada **kedua** tujuan tersebut. TLS verification dan proxy bawaan dipertahankan.
+Script tersebut membuat collection sementara, menguji upload dan search, lalu
+menghapus collection yang dibuatnya.
 
-Collection dipisahkan menurut `CHROMA_SCOPE` (pengguna/organisasi), identitas corpus,
-dan versi schema embedding. Berikan scope berbeda untuk data yang tidak boleh
-bercampur; pemisahan collection bukan pengganti kontrol akses tenant/API key. Opsional
-`RAG_CORPUS_ID` memberikan identitas tetap saat folder dipindah antarmesin; gunakan ID
-unik per corpus, bukan satu ID yang sama untuk semua file `ask`.
-
-Setiap collection dibuat dengan `get_or_create_collection` dan schema dense+sparse.
-Chunk memiliki `document_id`, `chunk_index`, path asli, ID evidence dan lokasi sumber.
-Chunk besar dipotong berdasarkan baris dengan batas default **12 KiB UTF-8**, termasuk
-pemotongan baris panjang pada batas karakter, agar tidak melampaui limit **16 KiB**.
-Search memakai `GroupBy(document_id)` untuk mengambil maksimum tiga chunk per dokumen
-(ubah `CHROMA_CHUNKS_PER_DOCUMENT` bila perlu lebih banyak bukti dari satu dokumen).
-
-Versi corpus diberi revision dan selalu difilter saat search. Upload yang gagal tidak
-mengaktifkan indeks parsial. Indexing ulang versi yang sama hanya mengunggah chunk
-yang belum ada; `ask` memakai ulang indeks bila inventory corpus belum berubah.
-`ask --reindex` memaksa pembangunan ulang. Versi berbeda di-embed ulang dan revision
-lama tetap tersimpan sehingga tidak menghapus data milik proses lain; kelola retensi
-collection di dashboard untuk membatasi penyimpanan. Benchmark kualitas, waktu dan
-biaya Cloud pada corpus sendiri; belum ada klaim bahwa API Cloud lebih cepat dari
-pencarian NumPy lokal untuk corpus kecil. Teks chunk dikirim ke Chroma untuk embedding
-dan penyimpanan, sedangkan backend OpenAI mengirim konteks hasil pencarian ke API OpenAI.
-
-### Migrasi indeks lama
-
-Tidak perlu mengunduh embedding BGE untuk Cloud. Skrip berikut membaca evidence dari
-snapshot lokal, melakukan chunking, dan menghasilkan embedding Qwen + SPLADE baru.
-Vektor NumPy lama tidak disalin karena ruang embedding berbeda. Snapshot lama dan
-file asli tetap utuh. Corpus harus masih cocok dengan fingerprint snapshot.
+Index dokumen dan ajukan pertanyaan pertama:
 
 ```bash
-# .env Cloud: gunakan RAG_STATE_DIR=state/chroma agar state lama tetap terpisah.
-./.venv/bin/python scripts/migrate_chroma.py --snapshot state/index.json --dry-run
-./.venv/bin/python scripts/migrate_chroma.py --snapshot state/index.json \
+./.venv/bin/python ask.py --reindex \
+  '/path/AI_Eng.docx' \
+  'apa materi di bulan 1 hari ke 8?'
+```
+
+Untuk pertanyaan berikutnya pada dokumen yang sama, `--reindex` tidak diperlukan:
+
+```bash
+./.venv/bin/python ask.py \
+  '/path/AI_Eng.docx' \
+  'apa tugas yang harus dikerjakan setelah materi tersebut?'
+```
+
+`ask.py` menampilkan jawaban, sumber, dan lokasi file JSON. File asli tidak diubah.
+Jika input berupa satu file, project membuat salinan kerja di dalam `state/ask-inputs`.
+
+Contoh output:
+
+```text
+Jawaban: Materi bulan pertama hari ke-8 membahas ...
+Sumber:
+- /path/AI_Eng.docx
+JSON: output/ask_<id>_output.json
+```
+
+## Indexing dan collection
+
+Chroma Cloud membatasi ukuran satu dokumen sebesar 16 KiB. Project memakai batas
+12 KiB UTF-8 dan memotong teks berdasarkan baris sebelum mengunggahnya. Setiap chunk
+membawa `document_id`, `chunk_index`, `chunk_id`, path sumber, dan lokasi asal.
+
+Nama collection dibentuk dari:
+
+- `CHROMA_SCOPE`, untuk memisahkan pengguna atau organisasi;
+- identitas corpus, berdasarkan lokasi corpus atau `RAG_CORPUS_ID`;
+- versi schema embedding.
+
+Setiap versi dokumen mendapat revision tersendiri. Search selalu difilter ke revision
+aktif. Indexing ulang dengan isi yang sama tidak menggandakan record, sedangkan
+perubahan dokumen menghasilkan revision baru.
+
+## Konfigurasi penting
+
+| Variabel | Keterangan |
+|---|---|
+| `OPENAI_API_KEY` | Key OpenAI untuk jawaban dan vision |
+| `OPENAI_MODEL` | Model pembuat jawaban, default `gpt-4.1-mini` |
+| `OPENAI_VISION_MODEL` | Model pembaca gambar, default `gpt-4.1-mini` |
+| `CHROMA_API_KEY` | Key Chroma Cloud untuk storage, embedding, dan search |
+| `CHROMA_SCOPE` | Pemisah collection antar pengguna/organisasi |
+| `RAG_CORPUS_ID` | Identitas corpus tetap, opsional |
+| `CHROMA_BATCH_SIZE` | Jumlah record per batch, default 64 |
+| `CHROMA_CHUNK_BYTES` | Batas chunk Cloud, default 12288 byte |
+| `CHROMA_CHUNKS_PER_DOCUMENT` | Maksimum chunk per dokumen setelah GroupBy, default 3 |
+| `RAG_STATE_DIR` | Snapshot dan salinan kerja, default `state` |
+| `RAG_OUTPUT_DIR` | Hasil jawaban JSON, default `output` |
+| `RAG_QUERY_TIMEOUT` | Batas waktu query, default 26 detik |
+| `RAG_STARTUP_TIMEOUT` | Batas startup dan indexing, default 570 detik |
+
+Nilai environment yang sudah diekspor di terminal memiliki prioritas lebih tinggi
+daripada `.env`. Restart worker setelah mengganti backend, model, endpoint, atau API
+key agar konfigurasi baru benar-benar digunakan.
+
+## Migrasi indeks lama
+
+Snapshot lokal dapat dipindahkan ke Chroma tanpa menyalin vektor lama. Script migrasi
+membaca evidence, membuat chunk Cloud, lalu menghasilkan embedding Qwen dan SPLADE.
+
+```bash
+./.venv/bin/python scripts/migrate_chroma.py \
+  --snapshot state/index.json \
+  --dry-run
+
+./.venv/bin/python scripts/migrate_chroma.py \
+  --snapshot state/index.json \
   --output state/chroma/index.json
 ```
 
-Output migration tidak boleh menimpa file yang sudah ada. Restart worker dengan
-konfigurasi `.env` yang sama (termasuk `RAG_STATE_DIR=state/chroma`) untuk restore.
-Restore memeriksa fingerprint, model/config dan kelengkapan record Cloud. Jika belum
-ada snapshot lama, cukup jalankan `ask`; indexing dan upload dilakukan otomatis.
+File snapshot asal tidak ditimpa.
 
-Untuk mode offline, pilih `RAG_SEARCH_BACKEND=local` dan config E0–E5. Cloud memerlukan
-Internet dan akun Chroma; jangan gunakan profil Cloud untuk evaluator yang melarang
-network. Config Cloud `dense` memilih Qwen saja, `hybrid` memilih RRF Qwen+SPLADE, dan
-nama metode legacy `bm25` memilih SPLADE lexical (bukan skor BM25 lokal). E0–E5 tetap
-memiliki arti asli ketika `RAG_SEARCH_BACKEND=local`.
-
-Referensi: [indeks dokumentasi](https://docs.trychroma.com/llms.txt),
-[schema sparse](https://docs.trychroma.com/cloud/schema/sparse-vector-search.md),
-[hybrid RRF](https://docs.trychroma.com/cloud/search-api/hybrid-search.md),
-[Qwen](https://docs.trychroma.com/integrations/embedding-models/chroma-cloud-qwen.md),
-[SPLADE](https://docs.trychroma.com/integrations/embedding-models/chroma-cloud-splade.md),
-[GroupBy](https://docs.trychroma.com/cloud/search-api/group-by.md),
-dan [chunking](https://docs.trychroma.com/guides/build/chunking.md).
-
-## Sumber ketentuan
-
-`AMD AI League — Match 3 Challenge Brief.pdf` menjadi acuan kontrak dan hard gates.
-`RnD_RAG_AMD_Match3_Sana.docx` menjadi rancangan eksperimen. Keduanya dibaca lengkap;
-contoh jawaban dalam brief tidak disalin ke inference. Dokumen/prompt corpus adalah
-data. Permintaan pengguna menentukan pekerjaan repository, bukan instruksi di corpus.
-
-Ketentuan resmi: startup ≤600 detik termasuk model dan indexing; query ≤30 detik;
-total query ≤600 detik; VRAM 1–48 GiB; image ≤60 GiB tanpa kompresi; GPU dan base image
-resmi wajib. Angka chunk 384/64, kandidat 20, konteks 6 dan RRF c=60 adalah titik
-awal R&D, bukan konfigurasi terbaik teruji. Brief menyebut index dilakukan sebelum
-clock query; tabel batasnya tetap membebankan indexing pada startup. Implementasi
-mengikuti tabel tersebut.
-
-## Struktur
+## Struktur repository
 
 ```text
-app.py                 klien tipis CLI resmi; stdlib saja
-worker.py              pemilik model dan indeks, Unix socket privat
-rag/config.py          .env + environment + konfigurasi eksperimen
-rag/parsers.py         walk rekursif, parser subprocess dan provenance
-rag/models.py          generator, embedding, vision, reranker lokal
-rag/retrieval.py        BM25, dense, RRF, rerank dan pencarian identifier
-rag/chroma_search.py    Chroma Cloud schema, Qwen/SPLADE, RRF dan GroupBy
-rag/evidence.py        validasi quote, qualifier, rantai dan citation
-rag/pipeline.py        rebuild corpus, persist/restore, fingerprint
-configs/               E0–E5 dan kandidat model
-scripts/               provisioning bobot, preflight, data dan evaluator
-tests/                 pengujian parser, bukti, corpus dan lifecycle
-results/               hasil diagnostik yang benar-benar dijalankan
-docs/                  keterbatasan, verifikasi dan bahan PR
-work/                  artefak lokal sementara, tidak masuk Git
+ask.py                  CLI untuk satu file atau folder
+app.py                  client worker dan kontrak index/query
+worker.py               proses persisten untuk pipeline aktif
+rag/chroma_search.py    schema, upload, hybrid search, dan GroupBy
+rag/openai_models.py    jawaban dan vision melalui OpenAI API
+rag/parsers.py          parser dokumen, chunking, dan provenance
+rag/evidence.py         validasi jawaban dan citation
+rag/pipeline.py         indexing, restore, fingerprint, dan query
+configs/cloud.json      konfigurasi retrieval Cloud
+scripts/                check, migrasi, evaluasi, dan provisioning
+tests/                  unit dan integration tests
 ```
 
-## Uji lokal di Linux atau MacBook
+## Pengujian
 
-Python 3.10+ diperlukan. Dependency parsing dikunci dan diuji dengan Python 3.12
-Linux. MacBook mendukung pengembangan/parsing; pengujian izin Docker dan ROCm harus
-dilakukan di Linux.
+Jalankan seluruh test suite dari root repository:
 
 ```bash
-python3 -m venv work/venv
-source work/venv/bin/activate
-python -m pip install --no-deps -r requirements-cpu.txt
-cp .env.example .env
+./.venv/bin/python -m unittest discover -s tests -v
 ```
 
-Untuk diagnostik CPU, isi `.env`:
+Saat ini terdapat 37 test untuk parser, lifecycle worker, Chroma SDK, schema
+dense/sparse, RRF, GroupBy, revision isolation, migrasi snapshot, OpenAI response,
+vision payload, timeout, serta validasi citation. Test integrasi memakai boundary HTTP
+lokal sehingga tidak memakai kredit Chroma atau OpenAI.
 
-```dotenv
-RAG_BACKEND=extractive
-RAG_SEARCH_BACKEND=local
-RAG_DEVICE=cpu
-RAG_REQUIRE_ROCM=false
-RAG_CONFIG=configs/E0.json
-```
+## Masalah yang sering muncul
+
+### Worker configuration changed
+
+Worker masih memakai konfigurasi lama. Cari PID worker milik project lalu hentikan:
 
 ```bash
-python -m unittest discover -s tests -v
-python scripts/make_synthetic.py --output work/synthetic
-python app.py --index work/synthetic/dev/corpus
-python app.py --corpus work/synthetic/dev/corpus --query-id local_01 \
-  --query 'What is the unit price at 20000 units?'
-cat output/local_01_output.json
+pgrep -fl 'RAG-Match3-AMD/worker.py'
+kill -TERM <PID>
 ```
 
-Backend `extractive` hanya mengambil satu pasangan key/value literal dengan konteks
-query yang cocok; ia tidak membaca gambar, tidak mendukung dense/rerank, dan tidak
-membuktikan kualitas generator. Untuk pipeline model gunakan backend `transformers`.
-Worker dibootstrap oleh `--index` pada penggunaan lokal; output/log di `output/` dan
-`state/`. Hentikan worker dengan SIGTERM ke PID dari `ping`/log atau jalankan
-`python worker.py` di terminal terpisah lalu Ctrl-C. Restart worker setiap mengubah
-backend/model/konfigurasi. Klien menolak konfigurasi yang berbeda dari worker.
+Perintah `ask.py` berikutnya akan menjalankan worker baru.
 
-## Bertanya dengan satu perintah
+### OpenAI `insufficient_quota`
 
-Setelah dependency dan `.env` disiapkan, gunakan `ask.py` untuk satu file atau
-folder dokumen. Path relatif dihitung dari lokasi terminal saat ini. Jika pertanyaan
-tidak diberikan, program memintanya lewat terminal:
+API key dikenali, tetapi project OpenAI yang menerbitkan key tidak memiliki kredit.
+Tambahkan saldo di OpenAI Platform atau gunakan key dari project yang memiliki saldo.
+Langganan ChatGPT tidak termasuk kredit OpenAI API.
+
+### Index gagal
+
+Lihat log worker:
 
 ```bash
-python ask.py '/path/dokumen saya.pdf'
-python ask.py '/path/folder-dokumen' 'Apa nomor komponen kipas produk PX-713?'
+tail -n 80 state/worker.log
 ```
 
-Untuk menggunakan nama perintah `ask`, aktifkan virtualenv dan tambahkan root repo
-ke PATH sekali per terminal (Linux/macOS):
+Log biasanya menunjukkan apakah masalah berasal dari credential, quota, parsing,
+atau koneksi ke layanan Cloud.
 
-```bash
-source work/venv/bin/activate
-export PATH="$PWD:$PATH"  # jalankan dari root repository
-ask '/path/dokumen saya.pdf'
-ask '/path/folder-dokumen' 'Pertanyaan tentang dokumen'
-```
+## Catatan penggunaan data dan biaya
 
-`ask` otomatis menjalankan indexing lalu query, menampilkan jawaban, sumber asli,
-dan lokasi JSON. File tunggal disalin ke `state/ask-inputs/` (atau `RAG_STATE_DIR`),
-karena pipeline menerima folder; file asli tidak diubah. Indeks yang masih valid
-dipakai ulang; dokumen yang berubah diindeks kembali. Gunakan `--reindex` untuk
-memaksa rebuild. Worker/model yang
-konfigurasinya sama tetap digunakan. Jalankan permintaan secara berurutan karena
-worker memiliki satu indeks aktif.
+Teks chunk beserta metadata disimpan dan diproses oleh Chroma Cloud. Gambar dokumen
+dan konteks hasil retrieval diproses oleh OpenAI. Pastikan dokumen yang digunakan
+memang boleh dikirim ke kedua layanan tersebut.
 
-Untuk uji CPU teks sederhana, gunakan `python ask.py --diagnostic '/path/file.txt'`
-atau `ask --diagnostic '/path/file.txt'`. Ini memakai extractive/BM25, bukan generator
-AI, dan tidak membaca gambar. Mode normal memakai konfigurasi `.env` dan memerlukan
-bobot lokal untuk backend Transformers. Restart worker sebelum berpindah mode;
-klien akan menolak worker dengan konfigurasi berbeda. Salinan dokumen, indeks, dan
-hasil disimpan lokal dalam direktori yang diabaikan Git; jangan memakai root repo
-sebagai corpus karena state/output/model harus berada di luar corpus.
+OpenAI dikenai biaya ketika vision membaca gambar dan ketika model menyusun jawaban.
+Embedding Qwen/SPLADE dijalankan oleh Chroma Cloud dan mengikuti quota atau paket
+Chroma. Setelah indeks pertama selesai, hindari `--reindex` jika isi dokumen tidak
+berubah.
 
-## Konfigurasi yang benar-benar dibaca
+## Referensi Chroma
 
-Worker dan CLI membaca `.env` di root repository (atau `RAG_ENV_FILE`). Variabel yang
-sudah diekspor mengambil prioritas, lalu `.env`, lalu default. Nilai relatif dihitung
-dari root repository. Reader menerima `KEY=value` dan quote, tanpa ekspansi shell,
-interpolasi, atau eksekusi. Jangan memakai `export KEY=...` di file `.env`.
-
-| Variabel | Kewajiban / default |
-|---|---|
-| `RAG_BACKEND` | Default `transformers`; `extractive` hanya diagnostik |
-| `RAG_SEARCH_BACKEND` | `chroma` untuk Cloud; default kode `local` untuk mempertahankan alur offline |
-| `CHROMA_API_KEY` | Wajib untuk pencarian/embedding Cloud; tidak disimpan dalam snapshot/config signature |
-| `CHROMA_HOST`, `CHROMA_TENANT`, `CHROMA_DATABASE` | Host Cloud dan identitas akun/database; lihat contoh di atas |
-| `CHROMA_SCOPE`, `RAG_CORPUS_ID` | Scope wajib untuk Cloud; identitas corpus opsional |
-| `CHROMA_CHUNK_BYTES`, `CHROMA_BATCH_SIZE` | Default 12288 byte dan 64 record per batch |
-| `CHROMA_CHUNKS_PER_DOCUMENT` | Default 3; GroupBy membatasi chunk per source document |
-| `RAG_CONFIG` | Opsional, default `configs/E0.json` |
-| `RAG_DEVICE`, `RAG_REQUIRE_ROCM` | Default `cuda`, `true`; wajib sesuai GPU untuk submission |
-| `RAG_MODEL_DIR` | Default `models`; snapshot lokal wajib untuk model nyata |
-| `RAG_GENERATOR_PATH`, `RAG_VISION_PATH` | Opsional override; snapshot wajib, default `models/generator`, `models/vision` |
-| `RAG_EMBEDDING_PATH` | Snapshot wajib pada dense/hybrid **lokal**; tidak dipakai pada Cloud |
-| `RAG_RERANKER_PATH` | Snapshot wajib bila rerank; default `models/reranker` |
-| `RAG_VERIFY_WEIGHTS` | Default `true`; SHA file dan revision diperiksa saat model load |
-| `RAG_SOCKET` | Opsional, default `/tmp/match3-rag.sock`; unik per worker |
-| `RAG_STATE_DIR`, `RAG_OUTPUT_DIR` | Opsional, default `state`, `output` |
-| `RAG_QUERY_TIMEOUT`, `RAG_STARTUP_TIMEOUT` | Default 26, 570 detik; harus di bawah gate resmi |
-| `RAG_PARSE_TIMEOUT`, `RAG_MAX_FILE_MB` | Opsional, default 15 detik/file dan 100 MiB/file |
-| `RAG_MAX_NEW_TOKENS` | Opsional, default 512; ukur pengaruh ke JSON dan latensi |
-| `HF_TOKEN` | Opsional, hanya provisioning model bila akses memerlukannya |
-
-Generasi jawaban lokal tidak membutuhkan API key; search Cloud membutuhkan key Chroma.
-`BASE_IMAGE` adalah argumen build
-wajib, **bukan** environment runtime; harus berasal dari aturan resmi. Semua direktori
-state/output/model dan label evaluasi harus di luar corpus. Tidak ada aturan berdasarkan
-nama produk, subfolder, file, query-id, atau expected answer.
-
-## Integrasi dan penyediaan model
-
-Kandidat pengembangan: generator `Qwen/Qwen2.5-3B-Instruct`, embedding
-`BAAI/bge-small-en-v1.5`, vision `Qwen/Qwen2.5-VL-3B-Instruct`, dan reranker opsional
-`BAAI/bge-reranker-base`. Ini pilihan sementara, belum disahkan/diukur pada image
-resmi. Loader memakai `AutoModelForCausalLM`, `AutoModel` dengan CLS BGE ternormalisasi,
-`Qwen2_5_VLForConditionalGeneration`, dan `AutoModelForSequenceClassification`.
-Vision dijalankan ketika indexing PNG/JPG serta halaman PDF scan/berisi gambar.
-Model bertahan dalam worker, termasuk setelah indexing dan query.
-
-Setelah aturan penyediaan bobot resmi diperiksa, lakukan provisioning **sebelum**
-evaluasi di mesin yang boleh mengakses model hub. Periksa model card/lisensi untuk
-setiap kandidat; pengunduh menyertakannya bila tersedia. Tidak ada token disimpan
-dalam manifest. Jangan menganggap unduhan atau internet saat evaluasi diizinkan.
-
-```bash
-# Dalam base image resmi / environment pengembangan yang cocok, pertahankan torch.
-python3 -m pip install --no-deps -r requirements.txt
-python3 scripts/download_models.py --roles generator embedding vision reranker
-python3 scripts/download_models.py --verify-only --roles generator embedding vision reranker
-```
-
-`configs/models.candidates.json` awal memakai ref `main`. Skrip menyelesaikan ref itu
-ke commit SHA 40 karakter, mengunduh **SHA tersebut**, lalu menulis
-`models/models.lock.json` dan `weights-manifest.json` per role dengan hash/ukuran tiap
-file. Pengunduhan ulang yang reproducible:
-
-```bash
-python3 scripts/download_models.py --lock /path/to/archived/models.lock.json \
-  --require-pinned --roles generator embedding vision reranker
-```
-
-Gunakan direktori target kosong untuk pengunduhan ulang. Arsipkan lock dan seluruh
-snapshot di penyimpanan terpisah dari Git. `models/` tidak masuk Git, tetapi **sengaja
-masuk build context** untuk dibundel ke image. Loader hanya menerima file lokal,
-safetensors, dan `trust_remote_code=false`. Container mematikan akses hub.
-Bobot belum diunduh dalam sesi ini: aturan resmi belum ada, dan host Hugging Face
-tidak tercantum dalam policy jaringan workspace. Tidak ada klaim model forward pass,
-akurasi vision, atau kompatibilitas AMD dari import kelas saja.
-
-## Corpus dan kontrak CLI
-
-```bash
-python3 /app/app.py --index /app/corpus
-python3 /app/app.py --corpus /app/corpus --query-id query_01 --query '...'
-```
-
-Output atomik: `/app/output/<query-id>_output.json`, selalu berisi string `answer`
-dan list string `citations`. Tidak ada bukti: `{"answer":"","citations":[]}`.
-Path citation relatif corpus; model hanya memilih ID/kutipan, tidak menulis path.
-File penghubung identifier tetap dicantumkan pada rantai lintas file. Teks jawaban
-harus muncul dalam quote; qualifier revisi/fiscal year dan identifier link yang
-terpotong ditolak. Pemilihan hubungan semantik dan penyelesaian revisi tetap tugas
-model dan perlu diuji pada corpus nyata.
-
-Setiap `--index` membangun indeks **baru** dari corpus yang diberikan. Indeks lama
-dinonaktifkan sebelum rebuild, termasuk bila rebuild gagal. Query menolak path lain
-atau perubahan inventory/mtime/size/mode corpus. Tidak ada indexing/model load pada
-query. Restart worker boleh memuat snapshot yang identitas corpus/config/model-nya
-masih valid; invocation `--index` berikutnya tetap membangunnya ulang.
-
-Parser membaca seluruh subdirektori, paragraf/tabel DOCX, semua sheet XLSX,
-CSV dengan header, PDF per halaman/tabel, teks/log/source Python tanpa mengeksekusi
-kode, dan vision gambar. File kosong/asing/symlink dilewati; error permission,
-enkripsi, korupsi dan timeout dicatat per file. Corpus symlink tidak diikuti untuk
-mencegah bukti keluar dari root. File >100 MiB default dilewati dan dicatat.
-Provenance menyimpan `chunk_id`, path, content, kind, page/sheet/row/block/line/region.
-Status parsial menunjukkan gambar tidak terbaca atau vision diagnostik nonaktif.
-
-Error worker/timeout menghasilkan output kosong dengan exit code 1 dan trace error,
-sehingga evaluator lokal tidak menghitungnya sebagai penolakan benar. Query-id hanya
-dipakai untuk nama output dan divalidasi terhadap traversal, tidak masuk inference.
-
-## Eksperimen dan evaluasi
-
-| Konfigurasi | Perubahan |
-|---|---|
-| E0 | BM25 |
-| E1 | Dense |
-| E2 | BM25 + dense + RRF |
-| E3 | E2 + reranker maksimum 20 kandidat |
-| E4 | E3 + satu putaran identifier, maksimum 4 identifier |
-| E4-no-rerank | Alternatif E2 + expansion, catat sebagai konfigurasi berbeda |
-| E5-256 / E5-512 | Template variasi chunking terhadap E4; sesuaikan dengan konfigurasi terpilih setelah benchmark |
-
-Chunk ukuran/overlap dihitung dengan perkiraan whitespace, bukan tokenizer model.
-Baris tabel dijaga bersama header. E0–E4 mempertahankan parser, generator, prompt,
-chunking dan query; buat worker/indeks baru setiap konfigurasi. E5 belum punya
-konfigurasi terbaik: jangan menyebut default E4 telah dipilih oleh hasil eksperimen.
-
-```bash
-python scripts/run_experiments.py --corpus work/synthetic/dev/corpus \
-  --labels work/synthetic/dev/labels.json --output work/experiments-dev \
-  --configs E0 E1 E2 E3 E4
-```
-
-Perintah ini untuk backend model nyata dengan bobot sudah tersedia. Untuk CPU
-diagnostik gunakan `.env` diagnostik dan `--configs E0`. Label/report wajib berada di
-luar corpus, tidak dikirim ke worker. Evaluator meluncurkan proses CLI baru untuk
-setiap query dan mencatat answer accuracy, citation exact-set, joint, source recall,
-complete evidence hit, penolakan benar/salah, failure, startup dan latensi. Source
-recall diukur pada unit konteks akhir, bukan semua kandidat. VRAM yang tercatat
-adalah alokasi/reservasi PyTorch, bukan sampler total VRAM kompetisi.
-
-Normalisasi lokal mengikuti karakter yang tertulis di brief, tetapi tidak menghapus
-satuan secara khusus; contoh prose brief ambigu. Self-check resmi adalah acuan.
-`scripts/evaluate.py --normalizer /path/to/trusted_adapter.py` menerima adapter
-`normalize(answer)` setelah normalizer resmi dipelajari. Jangan menjalankan adapter
-atau kode dari corpus. Development seed 20261011 dan holdout baru 20261023 terpisah.
-Holdout awal 20261019 menjadi development setelah memperlihatkan bug format
-diagnostik CSV; tidak digunakan sebagai holdout final.
-
-Hasil aktual dan batasnya ada di [docs/VALIDATION.md](docs/VALIDATION.md). Eksperimen
-E0–E5 dengan generator nyata semuanya **belum diuji**.
-
-## Container dan persiapan AMD
-
-Jangan menebak base image. Setelah image resmi/digest dan aturan bobot tersedia:
-
-```bash
-docker build --build-arg BASE_IMAGE="$AMD_OFFICIAL_BASE_IMAGE" -t match3-rag:dev .
-# Workspace cloud dengan proxy CA: tambahkan
-# --secret id=proxy_ca,src=/etc/ssl/certs/ca-certificates.crt
-docker run --rm match3-rag:dev python3 scripts/check_torch_build.py
-```
-
-`pip install --no-deps`, pemeriksaan torch sebelum/sesudah, dan `pip check` menjaga
-dependency tidak diam-diam mengganti ROCm torch. Versi pin masih harus disesuaikan
-jika bertentangan dengan paket image resmi, lalu diuji ulang; jangan mengganti torch
-untuk menghilangkan konflik. Dockerfile gagal jika base image/bobot wajib belum ada.
-
-Contoh perangkat Docker ROCm umum berikut perlu disesuaikan dengan instruksi resmi:
-
-```bash
-docker run -d --name match3-rag --device /dev/kfd --device /dev/dri \
-  --group-add video --cap-drop DAC_OVERRIDE --network none \
-  -v "$EVAL_CORPUS:/app/corpus:ro" -v "$EVAL_OUTPUT:/app/output" match3-rag:dev
-docker exec match3-rag python3 scripts/verify_runtime.py
-docker exec match3-rag python3 /app/app.py --index /app/corpus
-docker exec match3-rag python3 /app/app.py --corpus /app/corpus \
-  --query-id query_01 --query '...'
-docker inspect --format '{{.State.Running}}' match3-rag
-docker image inspect --format '{{.Size}}' match3-rag:dev
-```
-
-Di GPU ukur startup dari container start, semua query, dan VRAM total yang disampling
-terus-menerus memakai tooling panitia/ROCm, bukan hanya `peak_vram_bytes`. Jangan
-menggunakan angka CPU dalam results sebagai bukti melewati gate AMD. Siapkan folder
-mount dengan izin yang bisa dibaca user container ketika DAC_OVERRIDE dilepas.
-
-Unduh starter kit dari halaman resmi ketika tersedia, baca instruksinya, jalankan
-`setup.sh` di direktori kit, lalu self-check kit sesuai petunjuknya. Nama script
-self-check/image resmi tidak tersedia, sehingga tidak dibuat-buat di sini. Gunakan
-label mesin kit di evaluator tanpa memasukkannya ke corpus. Periksa aturan umum
-Section 2, benchmark model dan eksperimen pada AMD, bekukan lock/config, kemudian
-jalankan self-check dari build bersih. Proyek ini tidak melakukan deployment,
-submission, merge otomatis, atau perubahan visibilitas repository.
-
-## Mengambil perubahan ke MacBook
-
-Branch implementasi: `feat/dynamic-rag-match3` di `sanacvn/RAG-Match3-AMD`. Ambil branch:
-
-```bash
-git clone https://github.com/sanacvn/RAG-Match3-AMD.git
-cd RAG-Match3-AMD
-git fetch origin
-git switch --track origin/feat/dynamic-rag-match3
-```
-
-Untuk clone yang sudah ada gunakan tiga perintah terakhir tanpa `git clone`.
-Judul/deskripsi PR ada di `docs/PR.md`. Jika akses push/PR tidak tersedia, paket
-`git format-patch`/bundle yang disediakan bisa diaplikasikan di clone MacBook, lalu
-`git push -u origin feat/dynamic-rag-match3` dan buka draft PR ke `main`.
-`.env`, token, bobot, cache, indeks, output dan fixture generated tidak masuk Git.
+- [Chroma documentation index](https://docs.trychroma.com/llms.txt)
+- [Hybrid search](https://docs.trychroma.com/cloud/search-api/hybrid-search.md)
+- [Sparse vector search](https://docs.trychroma.com/cloud/schema/sparse-vector-search.md)
+- [Chroma Cloud Qwen](https://docs.trychroma.com/integrations/embedding-models/chroma-cloud-qwen.md)
+- [Chroma Cloud SPLADE](https://docs.trychroma.com/integrations/embedding-models/chroma-cloud-splade.md)
+- [GroupBy](https://docs.trychroma.com/cloud/search-api/group-by.md)
+- [Chunking guide](https://docs.trychroma.com/guides/build/chunking.md)
