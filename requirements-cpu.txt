@@ -6,4 +6,4 @@ lxml==5.4.0
 openpyxl==3.1.5
 et_xmlfile==2.0.0
 Pillow==11.2.1
-typing_extensions==4.13.2
+typing_extensions==4.16.0

@@ -22,4 +22,4 @@ certifi==2025.4.26
 charset-normalizer==3.4.2
 idna==3.10
 tqdm==4.67.1
-typing_extensions==4.13.2
+typing_extensions==4.16.0

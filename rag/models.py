@@ -67,7 +67,7 @@ class LocalModels:
             raise RuntimeError("Configured GPU is unavailable")
         self.identities = []
         roles = ["generator", "vision"]
-        if config.method != "bm25":
+        if config.search_backend == "local" and config.method != "bm25":
             roles.append("embedding")
         if config.rerank:
             roles.append("reranker")

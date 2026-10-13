@@ -48,18 +48,22 @@ class Retriever:
                 scores[i] += idf * tf * 2.2 / denom
         return sorted(scores, key=lambda i: (-scores[i], i))[:k]
 
+    def rank(self, query, deadline):
+        c = self.config
+        lexical = self.lexical(query, c.candidates) if c.method != "dense" else []
+        dense = []
+        if c.method != "bm25":
+            import numpy as np
+            vector = self.models.embed([query], query=True)[0]
+            dense = np.argsort(-(self.vectors @ vector), kind="stable")[:c.candidates].tolist()
+        return rrf([lexical, dense], c.rrf_c) if c.method == "hybrid" else lexical or dense
+
     def search(self, query, deadline):
         c = self.config
         if not self.evidence:
             return [], {"initial_ids": [], "expansion_identifiers": []}
         def base(q):
-            lexical = self.lexical(q, c.candidates) if c.method != "dense" else []
-            dense = []
-            if c.method != "bm25":
-                import numpy as np
-                vector = self.models.embed([q], query=True)[0]
-                dense = np.argsort(-(self.vectors @ vector), kind="stable")[:c.candidates].tolist()
-            return rrf([lexical, dense], c.rrf_c) if c.method == "hybrid" else lexical or dense
+            return self.rank(q, deadline)
         ranked = base(query)
         initial = ranked[:c.context_k]
         identifiers = []

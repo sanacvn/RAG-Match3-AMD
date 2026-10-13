@@ -14,6 +14,9 @@ class Pipeline:
     def __init__(self, config):
         self.started = time.monotonic()
         self.config = config
+        if config.search_backend == "chroma":
+            from .chroma_search import require_credentials
+            require_credentials()
         self.models = LocalModels(config) if config.backend == "transformers" else ExtractiveDiagnostics()
         self.retriever = None
         self.root = self.corpus_fingerprint = None
@@ -49,7 +52,13 @@ class Pipeline:
         before = fingerprint(root)
         evidence, manifest = parse_corpus(root, self.config, self.models.vision, deadline)
         atomic_json(self.state / "manifest.json", {"corpus": str(root), "files": manifest})
-        retriever = Retriever(evidence, self.config, self.models)
+        if self.config.search_backend == "chroma":
+            from .chroma_search import CloudRetriever, cloud_chunks, revision_for
+            evidence = cloud_chunks(evidence, self.config.chroma_chunk_bytes)
+            revision = revision_for(before, self.config, self.models.identities)
+            retriever = CloudRetriever(evidence, self.config, self.models, root, revision, deadline)
+        else:
+            retriever = Retriever(evidence, self.config, self.models)
         retriever.build_dense()
         if time.monotonic() >= deadline:
             raise TimeoutError("Indexing exceeded startup budget; index is unavailable")
@@ -60,9 +69,12 @@ class Pipeline:
             import numpy as np
             np.save(self.state / "dense.npy", retriever.vectors, allow_pickle=False)
         self.generation += 1
-        snapshot = {"schema": 1, "corpus": str(root), "fingerprint": after,
+        snapshot = {"schema": 2 if self.config.search_backend == "chroma" else 1,
+                    "corpus": str(root), "fingerprint": after,
                     "config_signature": self.config.signature(), "generation": self.generation,
                     "models": self.models.identities, "evidence": [e.to_dict() for e in evidence]}
+        if self.config.search_backend == "chroma":
+            snapshot["chroma"] = retriever.store.snapshot()
         atomic_json(self.state / "index.json", snapshot)
         self.retriever, self.root, self.corpus_fingerprint = retriever, root, after
         self.indexed_this_boot = True
@@ -70,6 +82,8 @@ class Pipeline:
                  "model_load_seconds": self.model_load_seconds,
                  "startup_elapsed_seconds": time.monotonic()-self.started,
                  "generation": self.generation, **self.models.metrics()}
+        if self.config.search_backend == "chroma":
+            stats.update(chroma=retriever.store.snapshot(), uploaded_chunks=retriever.uploaded)
         atomic_json(self.state / "startup.json", stats)
         return stats
 
@@ -80,19 +94,36 @@ class Pipeline:
             return False
         snapshot = json.loads(path.read_text())
         root = self._root(snapshot["corpus"])
-        if (snapshot["schema"] != 1 or snapshot["config_signature"] != self.config.signature()
+        if (snapshot["schema"] not in {1, 2} or snapshot["config_signature"] != self.config.signature()
                 or snapshot["models"] != self.models.identities or snapshot["fingerprint"] != fingerprint(root)):
             return False
         vectors = None
-        if self.config.method != "bm25":
+        if self.config.search_backend == "local" and self.config.method != "bm25":
             import numpy as np
             vectors = np.load(self.state / "dense.npy", allow_pickle=False)
             if vectors.shape[0] != len(snapshot["evidence"]):
                 return False
-        self.retriever = Retriever([Evidence(**e) for e in snapshot["evidence"]], self.config, self.models, vectors)
+        evidence = [Evidence(**e) for e in snapshot["evidence"]]
+        if self.config.search_backend == "chroma":
+            from .chroma_search import CloudRetriever, revision_for
+            cloud = snapshot.get("chroma")
+            if not cloud or cloud["revision"] != revision_for(snapshot["fingerprint"], self.config, self.models.identities):
+                return False
+            deadline = self.started + self.config.startup_timeout
+            retriever = CloudRetriever(evidence, self.config, self.models, root, cloud["revision"], deadline)
+            if retriever.store.snapshot() != cloud or not retriever.store.complete(deadline):
+                return False
+            self.retriever = retriever
+        else:
+            self.retriever = Retriever(evidence, self.config, self.models, vectors)
         self.root, self.corpus_fingerprint = root, snapshot["fingerprint"]
         self.generation = snapshot["generation"]
         return True
+
+    def index_valid(self, corpus):
+        root = self._root(corpus)
+        return (self.retriever is not None and root == self.root
+                and fingerprint(root) == self.corpus_fingerprint)
 
     def query(self, corpus, query, deadline):
         start = time.monotonic()

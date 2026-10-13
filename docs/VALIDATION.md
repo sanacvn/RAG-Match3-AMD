@@ -120,3 +120,20 @@ tidak membuktikan pemuatan/inference model, AMD atau akurasi.
 5. Ukur keseluruhan startup/query, sampler VRAM, image uncompressed dan container
    yang tetap hidup; ulangi self-check dari build bersih. Submission tidak dikirim
    otomatis oleh proyek ini.
+# Chroma Cloud integration validation (2026-10-13)
+
+The Chroma development environment uses Python 3.12 and `chromadb==1.5.9`.
+`python -m unittest discover -s tests -v` executes 29 tests, including 8 Cloud
+integration tests with the real SDK and mocked HTTP/server transport. These cover
+Qwen/SPLADE embedding calls, schema serialization, RRF/GroupBy request construction,
+UTF-8 byte limits, collection/revision isolation, idempotent upload, failed rebuilds,
+snapshot migration/restore, and credential failure before local model loading.
+The CLI tests also verify unchanged-document index reuse and forced rebuild.
+`pip check` passes with the combined local and Chroma requirements.
+
+This does **not** validate hosted retrieval quality, Cloud latency, account access,
+or model forward passes. The public Chroma API heartbeat responds HTTP 200, but
+`scripts/check_chroma.py` cannot perform authenticated upload/search until
+`CHROMA_API_KEY` is supplied securely. Chroma embedding requests require
+`embed.trychroma.com` in addition to `api.trychroma.com`. Run that script after
+configuring the key; it removes its own unique synthetic test collection.

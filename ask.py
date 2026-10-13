@@ -9,10 +9,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
+from app import ensure_worker
 from rag.config import Config, ROOT
 from rag.parsers import SUPPORTED
+from rag.protocol import request
 from rag.schema import validate_output
 
 
@@ -51,6 +54,7 @@ def main(argv=None):
     parser.add_argument("path", type=Path, help="Path file atau folder, relatif terhadap terminal saat ini")
     parser.add_argument("question", nargs="?", help="Pertanyaan; jika kosong, diminta lewat terminal")
     parser.add_argument("--diagnostic", action="store_true", help="Mode extractive CPU untuk uji teks sederhana")
+    parser.add_argument("--reindex", action="store_true", help="Bangun ulang indeks meskipun dokumen belum berubah")
     args = parser.parse_args(argv)
     try:
         source = args.path.expanduser().resolve(strict=True)
@@ -65,19 +69,26 @@ def main(argv=None):
         if args.diagnostic:
             # Explicit opt-in; don't silently replace real inference with diagnostics.
             os.environ.update(RAG_BACKEND="extractive", RAG_DEVICE="cpu",
-                              RAG_REQUIRE_ROCM="false", RAG_CONFIG=str(ROOT / "configs/E0.json"))
+                              RAG_REQUIRE_ROCM="false", RAG_SEARCH_BACKEND="local",
+                              RAG_CONFIG=str(ROOT / "configs/E0.json"))
         config = Config.read()
         corpus = prepare_corpus(source, config)
         query_id = "ask_" + uuid.uuid4().hex
         cli = [sys.executable, str(ROOT / "app.py")]
-        print("Mengindeks dokumen...", file=sys.stderr, flush=True)
-        indexed = subprocess.run(cli + ["--index", str(corpus)], cwd=ROOT,
-                                 stdout=subprocess.PIPE, text=True)
-        if indexed.returncode:
-            print(f"Index gagal. Periksa log: {Path(config.state_dir) / 'worker.log'}\n"
-                  "Pastikan backend, model dan perangkat sudah dikonfigurasi. "
-                  "Restart worker jika konfigurasi berubah.", file=sys.stderr)
-            return indexed.returncode
+        print("Memeriksa worker dan indeks...", file=sys.stderr, flush=True)
+        ensure_worker(config, time.monotonic() + config.startup_timeout)
+        status = request(config.socket, {"op": "index_status", "corpus": str(corpus),
+                                         "config_signature": config.signature()}, config.query_timeout)
+        # Older workers don't implement index_status; an explicit rebuild is safe.
+        if args.reindex or not status.get("valid", False):
+            print("Mengindeks dokumen...", file=sys.stderr, flush=True)
+            indexed = subprocess.run(cli + ["--index", str(corpus)], cwd=ROOT,
+                                     stdout=subprocess.PIPE, text=True)
+            if indexed.returncode:
+                print(f"Index gagal. Periksa log: {Path(config.state_dir) / 'worker.log'}", file=sys.stderr)
+                return indexed.returncode
+        else:
+            print("Menggunakan indeks yang sudah tersedia.", file=sys.stderr)
         queried = subprocess.run(cli + ["--corpus", str(corpus), "--query-id", query_id,
                                        "--query", question], cwd=ROOT)
         if queried.returncode:
@@ -92,8 +103,10 @@ def main(argv=None):
                 print(f"- {original}")
         print(f"JSON: {output_path}")
         return 0
-    except (OSError, ValueError, EOFError) as exc:
+    except (OSError, ValueError, RuntimeError, EOFError) as exc:
         print(f"ask: {exc}", file=sys.stderr)
+        if "config" in locals():
+            print(f"Log worker: {Path(config.state_dir) / 'worker.log'}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("\nDibatalkan.", file=sys.stderr)
