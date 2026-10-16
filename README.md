@@ -1,6 +1,6 @@
 # AMD AI League Match 3 RAG
 
-[Dokumentasi end-to-end berbahasa Indonesia](docs/END_TO_END_ID.md) menjelaskan alur pengguna, arsitektur, konfigurasi, troubleshooting, dan glosarium berdasarkan commit yang diperiksa.
+[Dokumentasi end-to-end berbahasa Indonesia](docs/END_TO_END_ID.md) menjelaskan alur pengguna, arsitektur, konfigurasi, troubleshooting, dan glosarium berdasarkan commit yang diperiksa. Tersedia juga [versi PDF untuk diunduh](docs/RAG-Match3-AMD_End-to-End_ID.pdf).
 
 Pipeline RAG dengan pencarian hybrid Chroma Cloud, corpus dinamis, citation berbukti,
 dan worker persisten. Mode pencarian lokal/offline tetap tersedia.
